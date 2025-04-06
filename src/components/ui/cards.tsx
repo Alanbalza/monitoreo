@@ -1,4 +1,5 @@
-import * as React from "react"
+import * as React from "react";
+import { PDFGenerator } from './PDFGenerator';
 import { 
   Card, 
   CardContent, 
@@ -6,12 +7,12 @@ import {
   CardHeader, 
   CardTitle,
   CardFooter
-} from "@/components/ui/card"
+} from "@/components/ui/card";
 import {
   Alert,
   AlertDescription,
   AlertTitle
-} from "@/components/ui/alert"
+} from "@/components/ui/alert";
 import { 
   Thermometer, 
   Droplet, 
@@ -24,9 +25,12 @@ import {
   Wind,
   AlertCircle,
   AlertTriangle,
-  RefreshCw
-} from "lucide-react"
-import { CartesianGrid, Line, LineChart, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts"
+  RefreshCw,
+  Wifi,
+  WifiOff
+} from "lucide-react";
+import { CartesianGrid, Line, LineChart, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
+import { io, Socket } from "socket.io-client";
 
 interface ChartData {
   date: string;
@@ -49,21 +53,119 @@ interface SensorChartProps {
   isActive?: boolean;
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+interface CustomThermometerProps {
+  temperatura: number;
+  max?: number;
+  min?: number;
+}
+
+interface CustomHumidityDropProps {
+  humedad: number;
+}
+
+const CustomThermometer: React.FC<CustomThermometerProps> = ({ temperatura, max = 40, min = 0 }) => {
+  const fillPercentage = Math.min(Math.max(((temperatura - min) / (max - min)) * 100, 0), 100);
+  
+  const getColor = (temp: number): string => {
+    if (temp < 10) return "#3B82F6";
+    if (temp < 25) return "#10B981";
+    return "#EF4444";
+  };
+  
+  const fillColor = getColor(temperatura);
+  
+  return (
+    <div className="flex flex-col items-center justify-center h-full">
+      <div className="relative h-32 w-10 mb-2 flex items-center justify-center">
+        <div className="absolute bottom-0 w-10 h-10 bg-white border-2 border-gray-300 rounded-full overflow-hidden flex items-center justify-center">
+          <div 
+            className="w-8 h-8 rounded-full" 
+            style={{ backgroundColor: fillColor }}
+          />
+        </div>
+        
+        <div className="absolute bottom-8 w-4 h-24 bg-white border-2 border-gray-300 rounded-t-lg overflow-hidden">
+          <div 
+            className="w-full absolute bottom-0 rounded-t-sm transition-all duration-500 ease-in-out"
+            style={{ 
+              height: `${fillPercentage}%`,
+              backgroundColor: fillColor 
+            }}
+          />
+        </div>
+        
+        <div className="absolute bottom-8 -left-4 h-24 flex flex-col justify-between items-end">
+          <span className="text-xs">{max}°C</span>
+          <span className="text-xs">{(max+min)/2}°C</span>
+          <span className="text-xs">{min}°C</span>
+        </div>
+      </div>
+      <div className="text-center">
+        <p className="text-4xl font-bold" style={{ color: fillColor }}>
+          {temperatura} <span className="text-xl font-normal text-muted-foreground">°C</span>
+        </p>
+      </div>
+    </div>
+  );
+};
+
+const CustomHumidityDrop: React.FC<CustomHumidityDropProps> = ({ humedad }) => {
+  const fillPercentage = Math.min(Math.max(humedad, 0), 100);
+  
+  return (
+    <div className="flex flex-col items-center justify-center h-full">
+      <div className="relative h-32 w-24 mb-2 flex items-center justify-center">
+        <div className="absolute w-20 h-28 border-2 border-gray-300 rounded-full rounded-t-[60%] overflow-hidden">
+          <div className="absolute inset-0 border-t-transparent border-1 rounded-full rounded-t-[60%]">
+            <div 
+              className="absolute bottom-0 w-full transition-all duration-500 ease-in-out"
+              style={{ 
+                height: `${fillPercentage}%`,
+                backgroundColor: "#3B82F6",
+                opacity: fillPercentage / 100 * 0.8 + 0.2
+              }}
+            />
+          </div>
+        </div>
+        
+        <div className="absolute -right-6 h-28 flex flex-col justify-between items-start">
+          <span className="text-xs">100%</span>
+          <span className="text-xs">50%</span>
+          <span className="text-xs">0%</span>
+        </div>
+      </div>
+      <div className="text-center">
+        <p className="text-4xl font-bold" style={{ color: "#3B82F6" }}>
+          {humedad} <span className="text-xl font-normal text-muted-foreground">%</span>
+        </p>
+      </div>
+    </div>
+  );
+};
+
+interface TooltipProps {
+  active?: boolean;
+  payload?: any[];
+  label?: string;
+}
+
+const CustomTooltip: React.FC<TooltipProps> = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     return (
       <div className="bg-white p-3 shadow-md rounded-md border border-gray-200">
         <p className="font-medium">{label}</p>
         <p className="text-sm" style={{ color: payload[0].color }}>
-          {payload[0].value} {payload[0].payload.unit}
+          {payload[0].payload.unit === '%' && payload[0].name === 'soilMoisture' 
+            ? payload[0].value.toFixed(2) // Mostrar 2 decimales solo para humedad del suelo
+            : payload[0].value.toFixed(1)} {payload[0].payload.unit}
         </p>
       </div>
-    )
+    );
   }
-  return null
-}
+  return null;
+};
 
-function SensorChart({ 
+const SensorChart: React.FC<SensorChartProps> = ({ 
   title, 
   description, 
   data, 
@@ -72,7 +174,7 @@ function SensorChart({
   trend = { value: 5.2, up: true },
   showCheck = false,
   isActive = true
-}: SensorChartProps) {
+}) => {
   return (
     <Card className="h-full">
       <CardHeader>
@@ -144,20 +246,35 @@ function SensorChart({
       {isActive && data.length > 0 && (
         <CardFooter className="flex-col items-start gap-1 text-sm">
           <div className="flex gap-2 font-medium leading-none" style={{ color: trend.up ? '#10B981' : '#EF4444' }}>
-            {trend.up ? "Subiendo" : "Bajando"} un {trend.value}% esta semana{" "}
+            {/* {trend.up ? "Subiendo" : "Bajando"} un {trend.value}% esta semana{" "}
             {showCheck ? <Check className="h-4 w-4" /> : trend.up ? (
               <TrendingUp className="h-4 w-4" />
             ) : (
               <TrendingDown className="h-4 w-4" />
-            )}
+            )} */}
           </div>
           <div className="leading-none text-muted-foreground">
-            Mostrando {title.toLowerCase()} de los últimos 7 días ({unit})
+            Mostrando {title.toLowerCase()} de las últimas horas ({unit})
           </div>
         </CardFooter>
       )}
     </Card>
-  )
+  );
+}
+
+interface SensorCardProps {
+  icon: React.ElementType;
+  title: string;
+  value: number | null; // Cambiado a permitir null
+  unit: string;
+  description: string;
+  iconColor: string;
+  trend?: { value: number; up: boolean };
+  showCheck?: boolean;
+  isActive?: boolean;
+  lastUpdated?: Date;
+  isUpdating?: boolean;
+  customDisplay?: ((value: number) => React.ReactNode) | null;
 }
 
 function SensorCard({ 
@@ -171,108 +288,123 @@ function SensorCard({
   showCheck = false,
   isActive = true,
   lastUpdated,
-  isUpdating = false
-}: { 
-  icon: React.ElementType, 
-  title: string, 
-  value: number | string, 
-  unit: string, 
-  description: string,
-  iconColor: string,
-  trend?: { value: number, up: boolean },
-  showCheck?: boolean,
-  isActive?: boolean,
-  lastUpdated?: Date,
-  isUpdating?: boolean
-}) {
+  customDisplay = null
+}: SensorCardProps) {
+  const [isNewData, setIsNewData] = React.useState(false);
+  const [isUpdating, setIsUpdating] = React.useState(false);
+
+  React.useEffect(() => {
+    if (value !== null) {
+      setIsNewData(true);
+      setIsUpdating(true);
+      
+      const updateTimer = setTimeout(() => setIsUpdating(false), 1000);
+      const scaleTimer = setTimeout(() => setIsNewData(false), 500);
+      
+      return () => {
+        clearTimeout(updateTimer);
+        clearTimeout(scaleTimer);
+      };
+    }
+  }, [value]);
+
+  // Determinar si el sensor está desconectado (valor null o NaN)
+  const isDisconnected = value === null || (typeof value === 'number' && isNaN(value));
+
   return (
     <Card className="w-full h-full flex flex-col relative">
-      {!isActive && (
+      {isDisconnected && (
         <div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full flex items-center">
           <AlertTriangle className="h-3 w-3 mr-1" />
-          Inactivo
+          Desconectado
         </div>
       )}
       
-      <CardHeader className="flex-row items-center justify-between pb-4">
+      <CardHeader className="flex-row items-center justify-between pb-2">
         <div className="flex items-center space-x-4">
-          <div className={`p-3 rounded-full`} style={{ 
+          <div className="p-3 rounded-full" style={{ 
             backgroundColor: `${iconColor}20`,
-            opacity: isActive ? 1 : 0.5 
+            opacity: !isDisconnected ? 1 : 0.5 
           }}>
-            <Icon color={isActive ? iconColor : "#6B7280"} size={24} strokeWidth={1.5} />
+            {typeof Icon === 'function' && <Icon color={!isDisconnected ? iconColor : "#6B7280"} size={24} strokeWidth={1.5} />}
           </div>
           <div>
-            <CardTitle className={isActive ? "text-lg" : "text-lg text-gray-400"}>{title}</CardTitle>
-            <CardDescription className={isActive ? "" : "text-gray-400"}>{description}</CardDescription>
+            <CardTitle className={!isDisconnected ? "text-lg" : "text-lg text-gray-400"}>{title}</CardTitle>
+            <CardDescription className={!isDisconnected ? "" : "text-gray-400"}>{description}</CardDescription>
           </div>
         </div>
-        {isUpdating && (
-          <RefreshCw className="h-4 w-4 animate-spin text-gray-500" />
-        )}
-        {!isUpdating && trend && isActive && (
-          <div className="flex items-center gap-1 text-sm font-medium" style={{ color: trend.up ? '#10B981' : '#EF4444' }}>
-            {trend.up ? '+' : ''}{trend.value}% 
-            {showCheck ? <Check className="h-4 w-4" /> : trend.up ? (
-              <TrendingUp className="h-4 w-4" />
-            ) : (
-              <TrendingDown className="h-4 w-4" />
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-1">
+          {isUpdating && !isDisconnected && (
+            <RefreshCw className="h-4 w-4 animate-spin text-gray-400" />
+          )}
+          {trend && !isDisconnected && !isUpdating && (
+            <div className="flex items-center gap-1 text-sm font-medium" style={{ color: trend.up ? '#10B981' : '#EF4444' }}>
+              {trend.up ? '+' : ''}{trend.value}% 
+              {showCheck ? <Check className="h-4 w-4" /> : trend.up ? (
+                <TrendingUp className="h-4 w-4" />
+              ) : (
+                <TrendingDown className="h-4 w-4" />
+              )}
+            </div>
+          )}
+        </div>
       </CardHeader>
-      <CardContent className="flex-1 flex flex-col items-center justify-center">
-        {isActive ? (
-          <div className="text-center">
-            <p className="text-4xl font-bold" style={{ color: iconColor }}>
-              {value} <span className="text-xl font-normal text-muted-foreground">{unit}</span>
-            </p>
+      <CardContent className="flex-1 flex flex-col items-center justify-center pt-0">
+        {!isDisconnected ? (
+          <div className={`w-full h-full flex flex-col items-center transition-all duration-300 ${isNewData ? 'scale-105' : 'scale-100'}`}>
+            {customDisplay && typeof value === 'number' ? customDisplay(value) : (
+              <div className="text-center">
+                <p className="text-4xl font-bold" style={{ color: iconColor }}>
+                  {value} <span className="text-xl font-normal text-muted-foreground">{unit}</span>
+                </p>
+              </div>
+            )}
             <p className="text-xs text-gray-500 mt-2">
-              Actualizado: {lastUpdated?.toLocaleTimeString() || 'Nunca'}
+              Actualizado: {lastUpdated?.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) || 'Nunca'}
             </p>
           </div>
         ) : (
           <Alert variant="destructive" className="mt-4">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Sensor inactivo</AlertTitle>
+            <AlertTitle>Sensor desconectado</AlertTitle>
             <AlertDescription>
-              Último valor válido: {value} {unit} ({lastUpdated?.toLocaleTimeString() || 'Nunca'})
+              No se están recibiendo datos de este sensor
             </AlertDescription>
           </Alert>
         )}
       </CardContent>
     </Card>
-  )
+  );
 }
 
-const validateSensorData = (data: any) => {
-  if (!data) {
-    console.error('Datos vacíos recibidos');
-    return false;
-  }
+interface SensorReading {
+  temperatura: number;
+  humedad: number;
+  luminosidad: number;
+  humedad_suelo: number;
+  timestamp?: string;
+}
+
+const validateSensorData = (data: SensorReading | null): boolean => {
+  if (!data) return false;
   
-  // Validar que todos los campos sean números válidos y no nulos
-  const isValid = (
-    data.temperatura !== null && !isNaN(data.temperatura) &&
-    data.humedad !== null && !isNaN(data.humedad) &&
-    data.luminosidad !== null && !isNaN(data.luminosidad) &&
-    data.humedad_suelo !== null && !isNaN(data.humedad_suelo)
+  return (
+    (data.temperatura !== null && !isNaN(data.temperatura)) ||
+    (data.humedad !== null && !isNaN(data.humedad)) ||
+    (data.luminosidad !== null && !isNaN(data.luminosidad)) ||
+    (data.humedad_suelo !== null && !isNaN(data.humedad_suelo))
   );
-
-  if (!isValid) {
-    console.error('Datos inválidos recibidos:', {
-      temperatura: data.temperatura,
-      humedad: data.humedad,
-      luminosidad: data.luminosidad,
-      humedad_suelo: data.humedad_suelo
-    });
-  }
-
-  return isValid;
 };
 
-const processHistoricalData = (rawData: any[]) => {
-  if (!Array.isArray(rawData) || rawData.length === 0) {
+interface ProcessedData {
+  temperature: ChartData[];
+  humidity: ChartData[];
+  luminosity: ChartData[];
+  soilMoisture: ChartData[];
+}
+
+const processHistoricalData = (rawData: SensorReading[]): ProcessedData => {
+  if (!Array.isArray(rawData)) {
     return {
       temperature: [],
       humidity: [],
@@ -281,17 +413,28 @@ const processHistoricalData = (rawData: any[]) => {
     };
   }
 
-  // Filtrar solo datos válidos
   const validData = rawData.filter(item => validateSensorData(item));
 
-  const dailyData: Record<string, any> = {};
+  // Función para redondear el tiempo al intervalo de 2 minutos más cercano
+  const roundToTwoMinutes = (date: Date): Date => {
+    const timestamp = date.getTime();
+    const twoMinutes = 15 * 60 * 1000; // 2 minutos en milisegundos
+    return new Date(Math.round(timestamp / twoMinutes) * twoMinutes);
+  };
+
+  const intervalData: Record<string, any> = {};
 
   validData.forEach(item => {
-    const date = new Date(item.timestamp);
-    const dateKey = date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+    const date = new Date(item.timestamp || '');
+    const roundedDate = roundToTwoMinutes(date);
+    const dateKey = roundedDate.toLocaleTimeString('es-ES', { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      hour12: false
+    });
     
-    if (!dailyData[dateKey]) {
-      dailyData[dateKey] = {
+    if (!intervalData[dateKey]) {
+      intervalData[dateKey] = {
         date: dateKey,
         temperature: [],
         humidity: [],
@@ -300,36 +443,51 @@ const processHistoricalData = (rawData: any[]) => {
       };
     }
 
-    dailyData[dateKey].temperature.push(item.temperatura);
-    dailyData[dateKey].humidity.push(item.humedad);
-    dailyData[dateKey].luminosity.push(item.luminosidad);
-    dailyData[dateKey].soilMoisture.push(item.humedad_suelo);
+    intervalData[dateKey].temperature.push(item.temperatura);
+    intervalData[dateKey].humidity.push(item.humedad);
+    intervalData[dateKey].luminosity.push(item.luminosidad);
+    intervalData[dateKey].soilMoisture.push(item.humedad_suelo);
   });
 
-  const result = {
-    temperature: Object.keys(dailyData).map(date => ({
+  return {
+    temperature: Object.keys(intervalData).map(date => ({
       date,
-      value: Number((dailyData[date].temperature.reduce((a: number, b: number) => a + b, 0) / dailyData[date].temperature.length).toFixed(1))
+      value: Number((intervalData[date].temperature.reduce((a: number, b: number) => a + b, 0) / intervalData[date].temperature.length).toFixed(1))
     })),
-    humidity: Object.keys(dailyData).map(date => ({
+    humidity: Object.keys(intervalData).map(date => ({
       date,
-      value: Number((dailyData[date].humidity.reduce((a: number, b: number) => a + b, 0) / dailyData[date].humidity.length).toFixed(1))
+      value: Number((intervalData[date].humidity.reduce((a: number, b: number) => a + b, 0) / intervalData[date].humidity.length).toFixed(2))
     })),
-    luminosity: Object.keys(dailyData).map(date => ({
+    luminosity: Object.keys(intervalData).map(date => ({
       date,
-      value: Number((dailyData[date].luminosity.reduce((a: number, b: number) => a + b, 0) / dailyData[date].luminosity.length).toFixed(1))
+      value: Number((intervalData[date].luminosity.reduce((a: number, b: number) => a + b, 0) / intervalData[date].luminosity.length).toFixed(1))
     })),
-    soilMoisture: Object.keys(dailyData).map(date => ({
+    soilMoisture: Object.keys(intervalData).map(date => ({
       date,
-      value: Number((dailyData[date].soilMoisture.reduce((a: number, b: number) => a + b, 0) / dailyData[date].soilMoisture.length).toFixed(1))
+      value: Number((intervalData[date].soilMoisture.reduce((a: number, b: number) => a + b, 0) / intervalData[date].soilMoisture.length).toFixed(2))
     }))
   };
-
-  return result;
 };
 
+interface SensorInfo {
+  id: number;
+  icon: React.ElementType;
+  title: string;
+  value: number;
+  unit: string;
+  description: string;
+  iconColor: string;
+  trend: { value: number; up: boolean };
+  showCheck?: boolean;
+  isActive: boolean;
+  lastUpdated: Date;
+  customDisplay?: ((value: number) => React.ReactNode) | null;
+}
+
 export default function SensorDashboard() {
-  const [sensorData, setSensorData] = React.useState([
+  
+  const [sensorData, setSensorData] = React.useState<SensorInfo[]>([
+    
     {
       id: 1,
       icon: Thermometer,
@@ -338,9 +496,10 @@ export default function SensorDashboard() {
       unit: "°C",
       description: "Temperatura actual",
       iconColor: "#EF4444",
-      trend: { value: 3.2, up: true },
+      trend: { value: 0, up: true },
       isActive: true,
-      lastUpdated: new Date()
+      lastUpdated: new Date(),
+      customDisplay: (value: number) => <CustomThermometer temperatura={value} />
     },
     {
       id: 2,
@@ -350,9 +509,10 @@ export default function SensorDashboard() {
       unit: "%",
       description: "Humedad relativa",
       iconColor: "#3B82F6",
-      trend: { value: 2.8, up: false },
+      trend: { value: 0, up: false },
       isActive: true,
-      lastUpdated: new Date()
+      lastUpdated: new Date(),
+      customDisplay: (value: number) => <CustomHumidityDrop humedad={value} />
     },
     {
       id: 3,
@@ -362,7 +522,7 @@ export default function SensorDashboard() {
       unit: "lx",
       description: "Nivel de luz",
       iconColor: "#F59E0B",
-      trend: { value: 4.5, up: true },
+      trend: { value: 0, up: true },
       showCheck: true,
       isActive: true,
       lastUpdated: new Date()
@@ -375,13 +535,13 @@ export default function SensorDashboard() {
       unit: "%",
       description: "Humedad del suelo",
       iconColor: "#8B5CF6",
-      trend: { value: 1.5, up: false },
+      trend: { value: 0, up: false },
       isActive: true,
       lastUpdated: new Date()
     }
   ]);
 
-  const [historicalData, setHistoricalData] = React.useState<Record<string, ChartData[]>>({
+  const [historicalData, setHistoricalData] = React.useState<ProcessedData>({
     temperature: [],
     humidity: [],
     luminosity: [],
@@ -389,12 +549,16 @@ export default function SensorDashboard() {
   });
 
   const [currentTime, setCurrentTime] = React.useState(new Date());
-  const [dataHistory, setDataHistory] = React.useState<any[]>([]);
+  const [dataHistory, setDataHistory] = React.useState<SensorReading[]>([]);
   const [connectionError, setConnectionError] = React.useState(false);
   const [dataError, setDataError] = React.useState(false);
-  const [isUpdating, setIsUpdating] = React.useState(false);
   const [lastApiUpdate, setLastApiUpdate] = React.useState<Date | null>(null);
+  const [socketConnected, setSocketConnected] = React.useState(false);
+  const [currentSensorData, setCurrentSensorData] = React.useState<SensorReading | null>(null);
+  
+  const socketRef = React.useRef<Socket | null>(null);
 
+  // Actualizar la hora cada segundo
   React.useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
@@ -402,14 +566,127 @@ export default function SensorDashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  const fetchCurrentData = async () => {
-    if (isUpdating) return; // Evitar múltiples llamadas simultáneas
-    
-    setIsUpdating(true);
-    try {
+  // Configurar conexión WebSocket
+  React.useEffect(() => {
+    socketRef.current = io("http://3.226.1.115:8029/datos", {
+      transports: ["websocket"],
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
+
+    socketRef.current.on("connect", () => {
+      console.log("Conectado al WebSocket");
+      setSocketConnected(true);
+      setConnectionError(false);
+      fetchInitialData();
+    });
+
+    socketRef.current.on("disconnect", () => {
+      console.log("Desconectado del WebSocket");
+      setSocketConnected(false);
+      setConnectionError(true);
+    });
+
+    socketRef.current.on("connect_error", (err) => {
+      console.error("Error de conexión:", err);
+      setSocketConnected(false);
+      setConnectionError(true);
+      if (!dataHistory.length) {
+        fetchInitialData();
+      }
+    });
+
+    // Escuchar datos en tiempo real
+    socketRef.current.on("new_data", (data: SensorReading) => {
       const now = new Date();
+      setLastApiUpdate(now);
+      
+      if (validateSensorData(data)) {
+        setCurrentSensorData({
+          ...data,
+          timestamp: data.timestamp || now.toISOString()
+        });
+        
+        setDataHistory(prev => [...prev, {
+          ...data,
+          timestamp: data.timestamp || now.toISOString()
+        }].slice(-1000));
+        
+        setDataError(false);
+      } else {
+        console.error("Datos inválidos recibidos:", data);
+        setDataError(true);
+      }
+    });
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, []);
+
+  // Actualizar las cards cuando llegan nuevos datos
+  React.useEffect(() => {
+    if (!currentSensorData) return;
+
+    setSensorData(prev => prev.map(sensor => {
+      let newValue: number;
+      let trendUp: boolean = false;
+      let trendValue: number = 0;
+
+      const prevValue = prev.find(s => s.id === sensor.id)?.value || 0;
+
+      switch(sensor.id) {
+        case 1: // Temperatura
+          newValue = currentSensorData.temperatura;
+          trendUp = newValue > prevValue;
+          trendValue = parseFloat(Math.abs(((newValue - prevValue) / (prevValue || 1)) * 100).toFixed(1));
+          break;
+        case 2: // Humedad
+          newValue = currentSensorData.humedad;
+          trendUp = newValue > prevValue;
+          trendValue = parseFloat(Math.abs(((newValue - prevValue) / (prevValue || 1)) * 100).toFixed(1));
+          break;
+        case 3: // Luminosidad
+          newValue = currentSensorData.luminosidad;
+          trendUp = newValue > prevValue;
+          trendValue = parseFloat(Math.abs(((newValue - prevValue) / (prevValue || 1)) * 100).toFixed(1));
+          break;
+        case 4: // Humedad del suelo
+          newValue = currentSensorData.humedad_suelo;
+          trendUp = newValue > prevValue;
+          trendValue = parseFloat(Math.abs(((newValue - prevValue) / (prevValue || 1)) * 100).toFixed(1));
+          break;
+        default:
+          newValue = sensor.value;
+      }
+
+      return {
+        ...sensor,
+        value: newValue,
+        isActive: true,
+        lastUpdated: new Date(),
+        trend: {
+          value: trendValue,
+          up: trendUp
+        }
+      };
+    }));
+  }, [currentSensorData]);
+
+  // Procesar datos históricos
+  React.useEffect(() => {
+    const processed = processHistoricalData(dataHistory);
+    setHistoricalData(processed);
+  }, [dataHistory]);
+
+  // Función para obtener datos iniciales
+  const fetchInitialData = async () => {
+    try {
       const response = await fetch('http://3.226.1.115:8029/datos', {
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(1000),
         headers: {
           'Cache-Control': 'no-cache',
           'Pragma': 'no-cache'
@@ -425,88 +702,55 @@ export default function SensorDashboard() {
         throw new Error('Datos vacíos recibidos');
       }
 
-      const sensorValues = data[0];
-      const dataIsValid = validateSensorData(sensorValues);
-
-      if (!dataIsValid) {
-        console.error('Datos inválidos:', sensorValues);
-        throw new Error('Datos de sensores inválidos');
-      }
-
-      // Actualizar historial
-      setDataHistory(prev => {
-        const newHistory = [...prev, { ...sensorValues, timestamp: now.toISOString() }];
-        return newHistory.slice(-1000); // Mantener solo los últimos 1000 registros
-      });
-
-      // Actualizar sensores con los últimos datos válidos
-      setSensorData(prev => prev.map(sensor => {
-        const newValue = 
-          sensor.id === 1 ? sensorValues.temperatura :
-          sensor.id === 2 ? sensorValues.humedad :
-          sensor.id === 3 ? sensorValues.luminosidad :
-          sensorValues.humedad_suelo;
-
-        return {
-          ...sensor,
-          value: newValue,
-          isActive: true,
-          lastUpdated: now,
-          trend: {
-            value: sensor.trend.value,
-            up: Math.random() > 0.5
-          }
-        };
+      const validData = data.map(item => ({
+        ...item,
+        timestamp: item.timestamp || new Date().toISOString()
       }));
+      
+      setDataHistory(validData.slice(-1000));
+      
+      // Establecer el último dato recibido
+      if (validData.length > 0) {
+        const lastReading = validData[validData.length - 1];
+        if (validateSensorData(lastReading)) {
+          setCurrentSensorData(lastReading);
+        }
+      }
 
       setConnectionError(false);
       setDataError(false);
-
     } catch (error) {
-      console.error('Error al obtener datos:', error);
+      console.error('Error al obtener datos iniciales:', error);
       setConnectionError(true);
       setDataError(true);
-      
-      // Mantener los últimos valores pero marcar como inactivos
-      setSensorData(prev => prev.map(sensor => ({
-        ...sensor,
-        isActive: false
-      })));
-    } finally {
-      setIsUpdating(false);
     }
   };
 
-  // Obtener datos cada 2 segundos
+  // Método de respaldo con polling
+  const fallbackPolling = React.useCallback(async () => {
+    if (socketConnected) return;
+    await fetchInitialData();
+  }, [socketConnected]);
+
+  // Configurar polling de respaldo
   React.useEffect(() => {
-    let intervalId: NodeJS.Timeout;
+    let pollingInterval: NodeJS.Timeout | null = null;
     
-    // Función para manejar la obtención de datos
-    const fetchData = async () => {
-      try {
-        await fetchCurrentData();
-      } catch (error) {
-        console.error('Error en la actualización periódica:', error);
+    if (!socketConnected) {
+      pollingInterval = setInterval(fallbackPolling, 1000);
+    }
+    
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
       }
     };
+  }, [socketConnected, fallbackPolling]);
 
-    // Llamar inmediatamente al montar el componente
-    fetchData();
-    
-    // Configurar el intervalo para actualizar cada 2 segundos
-    intervalId = setInterval(fetchData, 2000);
+  
 
-    // Limpieza al desmontar el componente
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, []);
 
-  // Procesar datos históricos
-  React.useEffect(() => {
-    const processed = processHistoricalData(dataHistory);
-    setHistoricalData(processed);
-  }, [dataHistory]);
+
 
   return (
     <div className="min-h-screen bg-gray-50 p-6 space-y-6">
@@ -517,7 +761,25 @@ export default function SensorDashboard() {
             Monitoreo en tiempo real de las condiciones ambientales
           </p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col md:flex-row items-end md:items-center gap-4">
+          <div className="flex items-center gap-2 text-sm">
+            {socketConnected ? (
+              <div className="flex items-center text-green-600">
+                <Wifi className="h-4 w-4 mr-1" />
+                <span>Conectado en tiempo real</span>
+              </div>
+            ) : connectionError ? (
+              <div className="flex items-center text-red-500">
+                <WifiOff className="h-4 w-4 mr-1" />
+                <span>Error de conexión</span>
+              </div>
+            ) : (
+              <div className="flex items-center text-orange-500">
+                <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
+                {/* <span>Conectando...</span> */}
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-2 text-sm text-gray-600">
             <Calendar className="h-4 w-4" />
             <span>{currentTime.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span>
@@ -526,10 +788,9 @@ export default function SensorDashboard() {
             <Clock className="h-4 w-4" />
             <span>
               {currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              {isUpdating && (
-                <span className="ml-1 inline-flex items-center">
-                  <RefreshCw className="h-3 w-3 animate-spin mr-1" />
-                  Actualizando...
+              {lastApiUpdate && (
+                <span className="ml-1 text-xs text-gray-500">
+                  (Últ. dato: {lastApiUpdate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })})
                 </span>
               )}
             </span>
@@ -567,7 +828,7 @@ export default function SensorDashboard() {
             showCheck={sensor.showCheck}
             isActive={sensor.isActive}
             lastUpdated={sensor.lastUpdated}
-            isUpdating={isUpdating}
+            customDisplay={sensor.customDisplay}
           />
         ))}
       </div>
@@ -579,7 +840,7 @@ export default function SensorDashboard() {
           data={historicalData.temperature}
           color="#EF4444"
           unit="°C"
-          trend={{ value: 3.2, up: true }}
+          trend={sensorData.find(s => s.id === 1)?.trend || { value: 0, up: true }}
           isActive={sensorData.find(s => s.id === 1)?.isActive}
         />
         <SensorChart
@@ -588,7 +849,7 @@ export default function SensorDashboard() {
           data={historicalData.humidity}
           color="#3B82F6"
           unit="%"
-          trend={{ value: 2.8, up: false }}
+          trend={sensorData.find(s => s.id === 2)?.trend || { value: 0, up: false }}
           isActive={sensorData.find(s => s.id === 2)?.isActive}
         />
         <SensorChart
@@ -597,7 +858,7 @@ export default function SensorDashboard() {
           data={historicalData.luminosity}
           color="#F59E0B"
           unit="lx"
-          trend={{ value: 4.5, up: true }}
+          trend={sensorData.find(s => s.id === 3)?.trend || { value: 0, up: true }}
           showCheck={true}
           isActive={sensorData.find(s => s.id === 3)?.isActive}
         />
@@ -607,10 +868,10 @@ export default function SensorDashboard() {
           data={historicalData.soilMoisture}
           color="#8B5CF6"
           unit="%"
-          trend={{ value: 1.5, up: false }}
+          trend={sensorData.find(s => s.id === 4)?.trend || { value: 0, up: false }}
           isActive={sensorData.find(s => s.id === 4)?.isActive}
         />
       </div>
     </div>
-  )
+  );
 }
