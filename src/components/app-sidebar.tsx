@@ -1,15 +1,22 @@
-import * as React from "react"
-import { Frame, PieChart, Home, Menu, LayoutGrid } from "lucide-react"
+import * as React from "react";
+import {
+  Frame,
+  PieChart,
+  Home,
+  Menu,
+  LayoutGrid,
+  FileText,
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
   SidebarHeader,
-} from "@/components/ui/sidebar"
+} from "@/components/ui/sidebar";
 
 // Importa el TeamSwitcher modificado con la funcionalidad de tema
-import { TeamSwitcher } from "@/components/team-switcher"
-import { NavProjects } from "@/components/nav-projects"
-import { Button } from "@/components/ui/button"
+import { TeamSwitcher } from "@/components/team-switcher";
+import { NavProjects } from "@/components/nav-projects";
+import { Button } from "@/components/ui/button";
 
 // Esta es una muestra de datos
 const data = {
@@ -23,14 +30,19 @@ const data = {
   projects: [
     {
       name: "Dashboard",
-      url: "/dashboard",
+      url: "/",
       icon: PieChart,
     },
+    {
+      name: "Reporte",
+      url: "/reporte",
+      icon: FileText,
+    },
   ],
-}
+};
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  const [isOpen, setIsOpen] = React.useState(false)
+  const [isOpen, setIsOpen] = React.useState(false);
 
   return (
     <>
@@ -50,8 +62,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </div>
 
       {/* Sidebar */}
-      <Sidebar 
-        collapsible="icon" 
+      <Sidebar
+        collapsible="icon"
         className={`fixed inset-y-0 left-0 z-50 transform border-r bg-background transition-transform duration-200 ease-in-out lg:translate-x-0 ${
           isOpen ? "translate-x-0" : "-translate-x-full"
         } lg:w-64`}
@@ -68,15 +80,27 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       {/* Barra de navegación inferior para móvil */}
       <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background lg:hidden">
         <div className="flex h-16 items-center justify-around">
-          <Button variant="ghost" size="icon" className="flex flex-col items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="flex flex-col items-center gap-1"
+          >
             <Home className="h-5 w-5" />
             <span className="text-xs">Inicio</span>
           </Button>
-          <Button variant="ghost" size="icon" className="flex flex-col items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="flex flex-col items-center gap-1"
+          >
             <LayoutGrid className="h-5 w-5" />
             <span className="text-xs">Pestañas</span>
           </Button>
-          <Button variant="ghost" size="icon" className="flex flex-col items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="flex flex-col items-center gap-1"
+          >
             <Menu className="h-5 w-5" />
             <span className="text-xs">Menú</span>
           </Button>
@@ -91,5 +115,5 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         />
       )}
     </>
-  )
+  );
 }
